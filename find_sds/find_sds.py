@@ -83,21 +83,27 @@ def find_sds(cas_list: List[str], download_path: str = None, pool_size: int = 10
 
     download_result = []
     try:
-        # # Using multithreading
+        # # Using multiprocessing (need to protect on Windows)
         if not debug:
-            with Pool(pool_size) as p:
-                download_result = p.map(partial(
-                                        download_sds,
-                                        download_path=download_path),
-                                    to_be_downloaded)
+            # On Windows, multiprocessing requires the main module to be protected
+            if __name__ == '__main__':
+                with Pool(pool_size) as p:
+                    download_result = p.map(partial(
+                                            download_sds,
+                                            download_path=download_path),
+                                        to_be_downloaded)
+            else:
+                # Fall back to sequential processing if not in main
+                download_result = []
+                for cas_nr in to_be_downloaded:
+                    download_result.append(download_sds(cas_nr=cas_nr, download_path=download_path))
         else:
             download_result = []
             for cas_nr in to_be_downloaded:
                 download_result.append(download_sds(cas_nr=cas_nr, download_path=download_path))
     except Exception as error:
         # if debug:
-        traceback_str = ''.join(traceback.format_exception(etype=type(error), value=error, tb=error.__traceback__))
-        print(traceback_str)
+        traceback.print_exc()
 
 
     # Step 2: print out summary

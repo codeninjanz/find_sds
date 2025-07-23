@@ -69,7 +69,7 @@ def test_extract_url_from_fisher_with_exception(monkeypatch, cas_nr, expect):
             # 'ChemicalSafety',
             # 'http://sds.chemicalsafety.com/sds/pda/msds/getpdf.ashx?action=msdsdocument&auth=200C200C200C200C2008207A200D2078200C200C200C200C200C200C200C200C200C2008&param1=ZmRwLjFfMTQ2NzY2MDNORQ==&unique='
             # 'ChemScene LLC', 'https://file.ambeed.com/static/upload/prosds/am/178/SDS-A177089.pdf',
-            'Ambeed, Inc.', 'https://file.ambeed.com/static/upload/prosds/am/178/SDS-A177089.pdf',
+            'ChemScene LLC', 'https://file.chemscene.com/pdf/UsaMSDS/MSDSUSACS-0030746.pdf',
             )
         ),
         ('1450-76-6', (
@@ -109,8 +109,8 @@ def test_extract_url_from_chemicalsafety_with_exception(monkeypatch, cas_nr, exp
 @pytest.mark.parametrize(
     "cas_nr, expect", [
         ('623-51-8', (
-            None,
-            None
+            'Fluorochem', 
+            'https://7128445.app.netsuite.com/core/media/media.nl?id=8540237&c=7128445&h=jbNYp3s7X1x7ed2QDCYb7_vQCj1Ae8VUCUBjXHjCnNLQCwhZ&_xt=.pdf'
             )
         ),
         ('28697-53-2', (
@@ -120,7 +120,7 @@ def test_extract_url_from_chemicalsafety_with_exception(monkeypatch, cas_nr, exp
         ),
         ('1450-76-6', (
             'Fluorochem',
-            'https://7128445.app.netsuite.com/core/media/media.nl?id=3274568&c=7128445&h=JZhDK4ckHBy0gdR1VbKyhzkmtZYBQzSKpmFRM33N7hUNvc4D&_xt=.pdf'
+            'https://7128445.app.netsuite.com/core/media/media.nl?id=8259398&c=7128445&h=NWks4Z9GW9rIsd-QxKkLp5Mn0dhDNmooZYDjFD36i0k3CnCp&_xt=.pdf'
             )
         ),
         ('491588-98-8', (

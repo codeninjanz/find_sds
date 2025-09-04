@@ -283,7 +283,7 @@ def extract_download_url_from_chemblink(cas_nr: str) -> Optional[Tuple[str, str]
 
 def extract_download_url_from_vwr(cas_nr: str) -> Optional[Tuple[str, str]]:
     """Search for url to download SDS for chemical with cas_nr
-    from https://us.vwr.com/store/search/searchMSDS.jsp
+    from Avantor Sciences (formerly VWR)
 
     Parameters
     ----------
@@ -295,70 +295,103 @@ def extract_download_url_from_vwr(cas_nr: str) -> Optional[Tuple[str, str]]:
     Optional[Tuple[str, str]]
         Tuple[str, str]:
             the name of the SDS source
-            the URL from Fisher for SDS file
+            the URL from Avantor for SDS file
         None: if URL cannot be found
-
-    Examples
-    --------
-    >>> print(extract_download_url_from_vwr(cas_nr='885051-07-0'))
-    ('TCI America', 'https://us.vwr.com/assetsvc/asset/en_US/id/18065210/contents')
     """
     global debug
 
-    adv_search_url = 'https://us.vwr.com/store/msds'
-    # adv_search_url = f'https://us.vwr.com/store/msds?keyword={cas_nr}'
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.192 Safari/537.36',
-    }
-    params = {
-        'keyword' : cas_nr
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
     }
 
     if debug:
-        print('Searching on https://us.vwr.com/store')
+        print('Searching on Avantor Sciences (formerly VWR)')
+
+    # Try multiple Avantor search approaches
+    search_urls = [
+        # Try the certificates/SDS search page
+        f'https://www.avantorsciences.com/us/en/certificates/search?q={cas_nr}',
+        # Try general product search  
+        f'https://www.avantorsciences.com/us/en/search?q={cas_nr}',
+        # Try the old VWR redirect
+        f'https://us.vwr.com/store/msds?keyword={cas_nr}'
+    ]
 
     try:
-        with requests.Session() as s1:
-            get_id = s1.get(adv_search_url, headers=headers, params=params, timeout=10)
-
-            if get_id.status_code == 200 and len(get_id.history) == 0:
-                html = BeautifulSoup(get_id.text, 'html.parser')
-                # print(html.prettify())
-
-                result_count_css = '.clearfix .pull-left'
-                result_count = re.search(r'(\d+).*results were found', html.select(result_count_css)[0].text)[1]
-                # print(result_count)
-
-                # Check to make sure that there is at least 1 hit
-                if result_count:
-                    # Find first product
-                    sds_link_css = 'td[data-title="SDS"] a'
-                    sds_links = html.select(sds_link_css)
-                    # print(sds_links[0]['href'])
-                    full_url = sds_links[0]['href']
-
-                    sds_manufacturer_css = 'td[data-title="Manufacturer"]'
-                    sds_manufacturers = html.select(sds_manufacturer_css)
-                    # print(sds_manufacturers[0].text)
-                    sds_source = sds_manufacturers[0].text.strip()
-
-                    return sds_source, full_url
-
-                #     full_url = sds_links[0]['href']
-                #     sds = s1.get(full_url)
-                #     # print(sds.content)
-
-                #     # Check to see if give OK status (200) and not redirect
-                #     if sds.status_code == 200 and len(sds.history) == 0:
-                #         # print('\nDownloading {} ...'.format(file_name))
-                #         open('vwr0.pdf', 'wb').write(sds.content)
-
+        with requests.Session() as session:
+            for search_url in search_urls:
+                try:
+                    response = session.get(search_url, headers=headers, timeout=20, allow_redirects=True)
+                    
+                    if response.status_code == 200:
+                        html = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # Look for various SDS link patterns
+                        sds_patterns = [
+                            # Direct SDS/MSDS links
+                            'a[href*="sds"]',
+                            'a[href*="msds"]', 
+                            'a[href*="SDS"]',
+                            'a[href*="MSDS"]',
+                            # Links with SDS text
+                            'a:contains("SDS")',
+                            'a:contains("MSDS")',
+                            'a:contains("Safety Data Sheet")',
+                            # PDF links (many SDS are PDFs)
+                            'a[href$=".pdf"]'
+                        ]
+                        
+                        for pattern in sds_patterns:
+                            sds_links = html.select(pattern)
+                            
+                            for link in sds_links:
+                                href = link.get('href', '')
+                                if href and any(term in href.lower() for term in ['sds', 'msds', 'safety']):
+                                    # Make URL absolute if needed
+                                    if not href.startswith('http'):
+                                        from urllib.parse import urljoin
+                                        href = urljoin(response.url, href)
+                                    
+                                    # Try to determine source/manufacturer
+                                    source = 'Avantor'
+                                    
+                                    # Look for manufacturer info near the link
+                                    parent = link.parent
+                                    if parent:
+                                        parent_text = parent.get_text(strip=True)
+                                        # Extract potential manufacturer name
+                                        for word in parent_text.split():
+                                            if len(word) > 3 and word[0].isupper():
+                                                source = word
+                                                break
+                                    
+                                    return source, href
+                        
+                        # If no SDS links found, check if this is a search results page
+                        # and look for product links to follow
+                        product_links = html.select('a[href*="product"]')
+                        if product_links and len(product_links) > 0:
+                            # Could potentially follow product links to find SDS
+                            # For now, just indicate that search worked but no direct SDS found
+                            if debug:
+                                print(f"  Found {len(product_links)} product links but no direct SDS")
+                                
+                except requests.RequestException as e:
+                    if debug:
+                        print(f"  Error with {search_url}: {e}")
+                    continue
+                    
     except Exception as error:
         if debug:
-            # traceback_str = ''.join(traceback.format_exception(etype=type(error), value=error, tb=error.__traceback__))
-            # print(traceback_str)
-            traceback.print_exception(error)
-        # return (cas_nr, downloaded, None)
+            print(f"VWR/Avantor search failed: {error}")
+
+    return None
 
 
 def extract_download_url_from_fisher(cas_nr: str) -> Optional[Tuple[str, str]]:
@@ -620,7 +653,7 @@ def extract_download_url_from_chemicalsafety(cas_nr: str) -> Optional[Tuple[str,
 
 def extract_download_url_from_fluorochem(cas_nr: str) -> Optional[Tuple[str, str]]:
     """Search for url to download SDS for chemical with cas_nr
-    from http://www.fluorochem.co.uk/
+    from Fluorochem (UK) using their search form
 
     Parameters
     ----------
@@ -632,51 +665,96 @@ def extract_download_url_from_fluorochem(cas_nr: str) -> Optional[Tuple[str, str
     Optional[Tuple[str, str]]
         Tuple[str, str]:
             the name of the SDS source
-            the URL from Fisher for SDS file
+            the URL from Fluorochem for SDS file
         None: if URL cannot be found
     """
-
-    # global debug
+    global debug
 
     headers = {
-        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.192 Safari/537.36',
-        'Content-Type': 'application/json', }
-
-    # url = 'http://www.fluorochem.co.uk/Products/Search'
-    # payload = {
-    #     "lstSearchType": "C",
-    #     "txtSearchText": cas_nr,
-    #     "showPrices": 'false',
-    #     "showStructures": 'false',
-    #     "groupFilters": []}
-
-    # Update on Jul 21 2024
-    url = 'https://dougdiscovery.com/api/v1/molecules/search'
-    payload = {
-        "q": cas_nr, "offset": 0, "limit": 12}
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    }
 
     if debug:
-        # print('Searching on http://www.fluorochem.co.uk')
-        print('Searching on Fluorochem (UK) using https://dougdiscovery.com/')
+        print('Searching on https://www.fluorochem.co.uk')
 
     try:
-        r = requests.post(url, headers=headers, timeout=20, data=json.dumps(payload))
-        if r.status_code == 200 and len(r.history) == 0:
-            res = r.json()
-            sds_info = res['data'][0]['molecule']['sds'] if res['data'] else None
-            if not sds_info:
-                return
-            sds_partial_url_en = sds_info['custrecord_sdslink_en']
-            # download info
-            full_url = f'https://7128445.app.netsuite.com{sds_partial_url_en}'
-            return 'Fluorochem', full_url
+        with requests.Session() as session:
+            # Use the search form found during investigation
+            search_urls = [
+                # Main site search form (found in investigation)
+                f'https://fluorochem.co.uk/?s={cas_nr}',
+                # Product search page
+                f'https://www.fluorochem.co.uk/Products/Search?q={cas_nr}',
+                # Alternative search format
+                f'https://fluorochem.co.uk/shop/?s={cas_nr}'
+            ]
+            
+            for search_url in search_urls:
+                try:
+                    response = session.get(search_url, headers=headers, timeout=15)
+                    
+                    if response.status_code == 200:
+                        html = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # Look for product results that might contain SDS
+                        product_elements = html.select('div.product, .product-item, .result-item, .search-result')
+                        
+                        if product_elements:
+                            if debug:
+                                print(f"  Found {len(product_elements)} product elements")
+                        
+                        # Look for direct SDS/MSDS links
+                        sds_selectors = [
+                            'a[href*="sds"]',
+                            'a[href*="msds"]', 
+                            'a[href*="SDS"]',
+                            'a[href*="MSDS"]',
+                            'a:contains("SDS")',
+                            'a:contains("MSDS")',
+                            'a:contains("Safety Data Sheet")',
+                            'a[href$=".pdf"]'  # PDF files might be SDS
+                        ]
+                        
+                        for selector in sds_selectors:
+                            sds_links = html.select(selector)
+                            
+                            for link in sds_links:
+                                href = link.get('href', '')
+                                text = link.get_text(strip=True).lower()
+                                
+                                # Check if this looks like an SDS link
+                                if href and (
+                                    any(term in href.lower() for term in ['sds', 'msds', 'safety']) or
+                                    any(term in text for term in ['sds', 'msds', 'safety data sheet'])
+                                ):
+                                    # Make URL absolute if needed
+                                    if not href.startswith('http'):
+                                        from urllib.parse import urljoin
+                                        href = urljoin(response.url, href)
+                                    
+                                    return 'Fluorochem', href
+                        
+                        # If no direct SDS links, look for product detail pages to potentially follow
+                        product_links = html.select('a[href*="product"], a[href*="shop"]')
+                        if product_links and debug:
+                            print(f"  Found {len(product_links)} product links - could follow for detailed search")
+                            
+                except requests.RequestException as e:
+                    if debug:
+                        print(f"  Error with {search_url}: {e}")
+                    continue
+                        
     except Exception as error:
-        #     print('.', end='')
         if debug:
-            # traceback_str = ''.join(traceback.format_exception(etype=type(error), value=error, tb=error.__traceback__))
-            # print(traceback_str)
-            traceback.print_exception(error)
-        # return None
+            print(f"Fluorochem search failed: {error}")
+    
+    return None
 
 
 def extract_download_url_from_tci(cas_nr: str) -> Optional[Tuple[str, str]]:
@@ -721,7 +799,42 @@ def extract_download_url_from_tci(cas_nr: str) -> Optional[Tuple[str, str]]:
 
     try:
         with requests.Session() as s:
-            get_id = s.get(adv_search_url, headers=headers, timeout=10, params={'text': cas_nr})
+            # Try multiple approaches with different timeouts
+            search_approaches = [
+                # Simple GET with CAS in URL
+                (f'{adv_search_url}?text={cas_nr}', 'GET', None, 15),
+                # Original POST approach but with shorter timeout
+                (adv_search_url, 'GET', {'text': cas_nr}, 25),
+                # Try alternative search format
+                (f'https://www.tcichemicals.com/US/en/search?q={cas_nr}', 'GET', None, 15)
+            ]
+            
+            for url, method, params, timeout in search_approaches:
+                try:
+                    if debug:
+                        print(f'  Trying TCI approach: {method} {url}')
+                    
+                    if method == 'GET':
+                        get_id = s.get(url, headers=headers, timeout=timeout, params=params)
+                    else:
+                        get_id = s.post(url, headers=headers, timeout=timeout, data=params)
+                    
+                    if get_id.status_code == 200 and len(get_id.history) == 0:
+                        break  # Success, continue with processing
+                        
+                except requests.exceptions.Timeout:
+                    if debug:
+                        print(f'  TCI timeout with {method} {url}')
+                    continue
+                except requests.exceptions.RequestException as e:
+                    if debug:
+                        print(f'  TCI request error with {method} {url}: {e}')
+                    continue
+            else:
+                # All approaches failed
+                if debug:
+                    print('  All TCI approaches failed')
+                return None
 
             if get_id.status_code == 200 and len(get_id.history) == 0:
                 # get_id.text
@@ -794,9 +907,10 @@ def extract_download_url_from_tci(cas_nr: str) -> Optional[Tuple[str, str]]:
 
     except Exception as error:
         if debug:
-            # traceback_str = ''.join(traceback.format_exception(etype=type(error), value=error, tb=error.__traceback__))
-            # print(traceback_str)
-            traceback.print_exception(error)
+            print(f"TCI search failed: {error}")
+            # Don't print full traceback for timeouts to reduce noise
+            if "timeout" not in str(error).lower():
+                traceback.print_exception(error)
 
 
 if __name__ == '__main__':

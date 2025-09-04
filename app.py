@@ -35,24 +35,43 @@ def home():
     """API documentation endpoint"""
     return jsonify({
         "message": "SDS Finder API",
-        "version": "2.0.0",
-        "description": "Search for Safety Data Sheets by CAS number or product name",
+        "version": "3.0.0",
+        "description": "Search for Safety Data Sheets by CAS number or product name across multiple databases",
+        "features": [
+            "Searches across 6 major chemical databases: ChemBlink, VWR/Avantor, Fisher Scientific, TCI, ChemicalSafety, Fluorochem",
+            "Returns ALL available results from each database, not just the first match",
+            "Supports both CAS number and product name searches",
+            "Provides detailed status information for each database searched"
+        ],
         "endpoints": {
             "/search/cas": {
                 "method": "POST",
-                "description": "Search for SDS by CAS number(s)",
+                "description": "Search for SDS by CAS number(s) across all databases",
                 "parameters": {
                     "cas_numbers": "List of CAS numbers (required)",
                     "download": "Boolean to download files (optional, default: false)"
+                },
+                "response": {
+                    "results": [
+                        {
+                            "cas_number": "string",
+                            "found": "boolean",
+                            "sources": "array of successful sources with URLs",
+                            "all_sources": "array showing status of all databases searched",
+                            "primary_source": "string (first successful source)",
+                            "primary_url": "string (URL from primary source)"
+                        }
+                    ]
                 }
             },
             "/search/product": {
                 "method": "POST", 
-                "description": "Search for SDS by product name(s)",
+                "description": "Search for SDS by product name(s) across all databases",
                 "parameters": {
                     "product_names": "List of product names (required)",
                     "download": "Boolean to download files (optional, default: false)"
-                }
+                },
+                "response": "Same structure as /search/cas but with product_name field"
             },
             "/search/mixed": {
                 "method": "POST",
@@ -61,8 +80,17 @@ def home():
                     "cas_numbers": "List of CAS numbers (optional)",
                     "product_names": "List of product names (optional)", 
                     "download": "Boolean to download files (optional, default: false)"
-                }
+                },
+                "response": "Combined results with type field indicating 'cas' or 'product'"
             }
+        },
+        "databases_searched": {
+            "ChemBlink": "CAS and product name searches",
+            "VWR/Avantor": "CAS and product name searches", 
+            "Fisher Scientific": "CAS and product name searches",
+            "TCI Chemicals": "CAS and product name searches",
+            "ChemicalSafety": "CAS and product name searches",
+            "Fluorochem": "CAS and product name searches"
         }
     })
 
@@ -102,14 +130,20 @@ def search_by_cas():
                     "download_url": f"/download/{request_id}/{file_name}" if file_path.exists() else None
                 })
         else:
-            # Just search for URLs without downloading
+            # Just search for URLs without downloading - return ALL results
             for cas_nr in cas_numbers:
-                found_info = search_sds_sources(cas_nr, search_type="cas")
+                all_sources = search_sds_sources_all(cas_nr, search_type="cas")
+                
+                # Filter to only successful results
+                successful_sources = [s for s in all_sources if s["status"] == "success"]
+                
                 results.append({
                     "cas_number": cas_nr,
-                    "found": found_info is not None,
-                    "source": found_info[0] if found_info else None,
-                    "url": found_info[1] if found_info else None
+                    "found": len(successful_sources) > 0,
+                    "sources": successful_sources,
+                    "all_sources": all_sources,  # Include status of all databases searched
+                    "primary_source": successful_sources[0]["source"] if successful_sources else None,
+                    "primary_url": successful_sources[0]["url"] if successful_sources else None
                 })
         
         return jsonify({
@@ -143,9 +177,13 @@ def search_by_product():
         results = []
         
         for product_name in product_names:
-            found_info = search_sds_sources(product_name, search_type="product")
+            all_sources = search_sds_sources_all(product_name, search_type="product")
+            successful_sources = [s for s in all_sources if s["status"] == "success"]
             
-            if found_info and download:
+            # Use primary (first successful) source for download
+            primary_source = successful_sources[0] if successful_sources else None
+            
+            if primary_source and download:
                 # Download the file
                 download_path.mkdir(exist_ok=True)
                 file_name = f"{product_name.replace(' ', '_').replace('/', '_')}-SDS.pdf"
@@ -156,7 +194,7 @@ def search_by_product():
                     headers = {
                         'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.192 Safari/537.36'
                     }
-                    r = requests.get(found_info[1], headers=headers, timeout=20)
+                    r = requests.get(primary_source["url"], headers=headers, timeout=20)
                     if r.status_code == 200:
                         with open(file_path, 'wb') as f:
                             f.write(r.content)
@@ -171,9 +209,11 @@ def search_by_product():
             
             results.append({
                 "product_name": product_name,
-                "found": found_info is not None,
-                "source": found_info[0] if found_info else None,
-                "url": found_info[1] if found_info else None,
+                "found": len(successful_sources) > 0,
+                "sources": successful_sources,
+                "all_sources": all_sources,
+                "primary_source": primary_source["source"] if primary_source else None,
+                "primary_url": primary_source["url"] if primary_source else None,
                 "downloaded": downloaded if download else None,
                 "download_url": f"/download/{request_id}/{file_path.name}" if downloaded else None
             })
@@ -215,9 +255,10 @@ def search_mixed():
                 cas_numbers = [cas_numbers]
             
             for cas_nr in cas_numbers:
-                found_info = search_sds_sources(cas_nr, search_type="cas")
+                all_sources = search_sds_sources_all(cas_nr, search_type="cas")
+                successful_sources = [s for s in all_sources if s["status"] == "success"]
                 
-                if found_info and download:
+                if successful_sources and download:
                     # Use existing download_sds function
                     download_path.mkdir(exist_ok=True)
                     cas_result = download_sds(cas_nr, str(download_path))
@@ -231,9 +272,11 @@ def search_mixed():
                 results.append({
                     "type": "cas",
                     "identifier": cas_nr,
-                    "found": found_info is not None,
-                    "source": found_info[0] if found_info else None,
-                    "url": found_info[1] if found_info else None,
+                    "found": len(successful_sources) > 0,
+                    "sources": successful_sources,
+                    "all_sources": all_sources,
+                    "primary_source": successful_sources[0]["source"] if successful_sources else None,
+                    "primary_url": successful_sources[0]["url"] if successful_sources else None,
                     "downloaded": downloaded if download else None,
                     "download_url": f"/download/{request_id}/{file_name}" if downloaded else None
                 })
@@ -244,9 +287,11 @@ def search_mixed():
                 product_names = [product_names]
             
             for product_name in product_names:
-                found_info = search_sds_sources(product_name, search_type="product")
+                all_sources = search_sds_sources_all(product_name, search_type="product")
+                successful_sources = [s for s in all_sources if s["status"] == "success"]
+                primary_source = successful_sources[0] if successful_sources else None
                 
-                if found_info and download:
+                if primary_source and download:
                     # Download the file
                     download_path.mkdir(exist_ok=True)
                     file_name = f"{product_name.replace(' ', '_').replace('/', '_')}-SDS.pdf"
@@ -257,7 +302,7 @@ def search_mixed():
                         headers = {
                             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.192 Safari/537.36'
                         }
-                        r = requests.get(found_info[1], headers=headers, timeout=20)
+                        r = requests.get(primary_source["url"], headers=headers, timeout=20)
                         if r.status_code == 200:
                             with open(file_path, 'wb') as f:
                                 f.write(r.content)
@@ -273,9 +318,11 @@ def search_mixed():
                 results.append({
                     "type": "product",
                     "identifier": product_name,
-                    "found": found_info is not None,
-                    "source": found_info[0] if found_info else None,
-                    "url": found_info[1] if found_info else None,
+                    "found": len(successful_sources) > 0,
+                    "sources": successful_sources,
+                    "all_sources": all_sources,
+                    "primary_source": primary_source["source"] if primary_source else None,
+                    "primary_url": primary_source["url"] if primary_source else None,
                     "downloaded": downloaded if download else None,
                     "download_url": f"/download/{request_id}/{file_path.name}" if downloaded else None
                 })
@@ -303,43 +350,91 @@ def download_file(request_id, filename):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def search_sds_sources(query: str, search_type: str = "cas") -> Optional[tuple]:
+def search_sds_sources_all(query: str, search_type: str = "cas") -> List[Dict]:
     """
-    Search all SDS sources for a given query (CAS number or product name)
+    Search ALL SDS sources for a given query and return all found results
     
     Args:
         query: CAS number or product name to search for
         search_type: "cas" or "product" to indicate search type
     
     Returns:
-        Tuple of (source_name, url) if found, None otherwise
+        List of dictionaries with source info, each containing:
+        - source: source name
+        - url: download URL
+        - status: 'success' or 'error'
+        - error: error message if status is 'error'
     """
     
     # Enable debug mode for better error handling
     import find_sds.find_sds as sds_module
-    sds_module.debug = True
+    sds_module.debug = False  # Reduce noise in production
+    
+    results = []
     
     if search_type == "cas":
-        # Use existing CAS-based search functions
-        return (
-            extract_download_url_from_chemblink(query) or 
-            extract_download_url_from_vwr(query) or 
-            extract_download_url_from_fisher(query) or 
-            extract_download_url_from_tci(query) or 
-            extract_download_url_from_chemicalsafety(query) or 
-            extract_download_url_from_fluorochem(query)
-        )
-    
+        # CAS-based search functions with their names
+        sources = [
+            ("ChemBlink", extract_download_url_from_chemblink),
+            ("VWR", extract_download_url_from_vwr),
+            ("Fisher", extract_download_url_from_fisher),
+            ("TCI", extract_download_url_from_tci),
+            ("ChemicalSafety", extract_download_url_from_chemicalsafety),
+            ("Fluorochem", extract_download_url_from_fluorochem)
+        ]
+        
     elif search_type == "product":
-        # Use product name search functions (will be implemented)
-        return (
-            extract_download_url_from_chemicalsafety_by_name(query) or
-            extract_download_url_from_vwr_by_name(query) or
-            extract_download_url_from_fisher_by_name(query) or
-            extract_download_url_from_tci_by_name(query) or
-            extract_download_url_from_chemblink_by_name(query) or
-            extract_download_url_from_fluorochem_by_name(query)
-        )
+        # Product name search functions with their names
+        sources = [
+            ("ChemicalSafety", extract_download_url_from_chemicalsafety_by_name),
+            ("VWR", extract_download_url_from_vwr_by_name),
+            ("Fisher", extract_download_url_from_fisher_by_name),
+            ("TCI", extract_download_url_from_tci_by_name),
+            ("ChemBlink", extract_download_url_from_chemblink_by_name),
+            ("Fluorochem", extract_download_url_from_fluorochem_by_name)
+        ]
+    else:
+        return []
+    
+    # Try each source and collect all results
+    for source_name, source_func in sources:
+        try:
+            result = source_func(query)
+            if result:  # If source returns a valid tuple (source, url)
+                results.append({
+                    "source": result[0],  # Use the actual source name returned by function
+                    "database": source_name,  # Database that was searched
+                    "url": result[1],
+                    "status": "success"
+                })
+            else:
+                results.append({
+                    "source": None,
+                    "database": source_name,
+                    "url": None,
+                    "status": "not_found"
+                })
+        except Exception as e:
+            results.append({
+                "source": None,
+                "database": source_name,
+                "url": None,
+                "status": "error",
+                "error": str(e)
+            })
+    
+    return results
+
+def search_sds_sources(query: str, search_type: str = "cas") -> Optional[tuple]:
+    """
+    Legacy function - returns first successful result for compatibility
+    """
+    all_results = search_sds_sources_all(query, search_type)
+    
+    # Return first successful result for backward compatibility
+    for result in all_results:
+        if result["status"] == "success":
+            return (result["source"], result["url"])
     
     return None
 

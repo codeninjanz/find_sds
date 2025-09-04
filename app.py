@@ -315,6 +315,10 @@ def search_sds_sources(query: str, search_type: str = "cas") -> Optional[tuple]:
         Tuple of (source_name, url) if found, None otherwise
     """
     
+    # Enable debug mode for better error handling
+    import find_sds.find_sds as sds_module
+    sds_module.debug = True
+    
     if search_type == "cas":
         # Use existing CAS-based search functions
         return (
